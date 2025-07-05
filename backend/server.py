@@ -31,6 +31,7 @@ users_collection = db.users
 contents_collection = db.contents
 favorites_collection = db.favorites
 watch_progress_collection = db.watch_progress
+settings_collection = db.settings
 
 # Models
 class User(BaseModel):
@@ -100,6 +101,13 @@ class WatchProgress(BaseModel):
     total_duration: int  # in seconds
     last_watched: datetime
 
+class WatchProgressUpdate(BaseModel):
+    watched_time: int
+    total_duration: int
+
+class Settings(BaseModel):
+    registration_enabled: bool = True
+
 # Utility functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -152,8 +160,21 @@ def get_admin_user(current_user: dict = Depends(get_current_user)):
         )
     return current_user
 
-async def init_admin_user():
-    """Initialize admin user if it doesn't exist"""
+def get_settings():
+    settings = settings_collection.find_one({"_id": "global_settings"})
+    if not settings:
+        # Create default settings
+        default_settings = {
+            "_id": "global_settings",
+            "registration_enabled": True
+        }
+        settings_collection.insert_one(default_settings)
+        return default_settings
+    return settings
+
+async def init_data():
+    """Initialize admin user and first content if they don't exist"""
+    # Create admin user
     admin_email = "alexx5916000@gmail.com"
     admin_password = "@lexiS-59_160"
     
@@ -168,13 +189,31 @@ async def init_admin_user():
         }
         users_collection.insert_one(admin_user)
         print(f"Admin user created: {admin_email}")
-    else:
-        print("Admin user already exists")
+    
+    # Add first content: "Le retour du grand blond"
+    existing_content = contents_collection.find_one({"title": "Le retour du grand blond"})
+    if not existing_content:
+        first_content = {
+            "id": str(uuid.uuid4()),
+            "title": "Le retour du grand blond",
+            "description": "François Perrin arrive à Toulouse et est immédiatement pris pour un dangereux espion par les services secrets. Cette méprise va l'entraîner dans une série d'aventures rocambolesques.",
+            "category": "comédie",
+            "video_url": "https://player.vimeo.com/video/1098993408",
+            "video_source": "vimeo",
+            "cover_image": "https://images.pexels.com/photos/28773655/pexels-photo-28773655.jpeg",
+            "type": "movie",
+            "duration": 84,
+            "year": 1974,
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        contents_collection.insert_one(first_content)
+        print("First content added: Le retour du grand blond")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize admin user on startup
-    await init_admin_user()
+    # Initialize data on startup
+    await init_data()
     yield
 
 # FastAPI app
@@ -193,6 +232,11 @@ app.add_middleware(
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "message": "Streamflix API is running"}
+
+@app.get("/api/settings")
+async def get_settings_endpoint():
+    settings = get_settings()
+    return {"registration_enabled": settings.get("registration_enabled", True)}
 
 @app.post("/api/auth/login")
 async def login(user_data: UserLogin):
@@ -220,6 +264,14 @@ async def login(user_data: UserLogin):
 
 @app.post("/api/auth/register")
 async def register(user_data: UserLogin):
+    # Check if registration is enabled
+    settings = get_settings()
+    if not settings.get("registration_enabled", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is currently disabled"
+        )
+    
     existing_user = users_collection.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(
@@ -326,6 +378,27 @@ async def delete_content(content_id: str, admin_user: dict = Depends(get_admin_u
     
     return {"message": "Content deleted successfully"}
 
+@app.put("/api/admin/settings")
+async def update_settings(settings: Settings, admin_user: dict = Depends(get_admin_user)):
+    settings_collection.update_one(
+        {"_id": "global_settings"},
+        {"$set": {"registration_enabled": settings.registration_enabled}},
+        upsert=True
+    )
+    return {"message": "Settings updated successfully"}
+
+@app.get("/api/admin/stats")
+async def get_admin_stats(admin_user: dict = Depends(get_admin_user)):
+    total_users = users_collection.count_documents({"role": "user"})
+    total_contents = contents_collection.count_documents({})
+    total_favorites = favorites_collection.count_documents({})
+    
+    return {
+        "total_users": total_users,
+        "total_contents": total_contents,
+        "total_favorites": total_favorites
+    }
+
 # Public routes
 @app.get("/api/contents")
 async def get_contents(category: Optional[str] = None, search: Optional[str] = None):
@@ -372,6 +445,9 @@ async def get_user_favorites(current_user: dict = Depends(get_current_user)):
     for favorite in favorites:
         content = contents_collection.find_one({"id": favorite["content_id"]})
         if content:
+            # Convert MongoDB ObjectId to string
+            if '_id' in content:
+                content['_id'] = str(content['_id'])
             favorite_contents.append({
                 "favorite_id": favorite["id"],
                 "content": content,
@@ -426,6 +502,14 @@ async def remove_from_favorites(content_id: str, current_user: dict = Depends(ge
     
     return {"message": "Removed from favorites"}
 
+@app.get("/api/favorites/check/{content_id}")
+async def check_favorite(content_id: str, current_user: dict = Depends(get_current_user)):
+    favorite = favorites_collection.find_one({
+        "user_id": current_user["id"],
+        "content_id": content_id
+    })
+    return {"is_favorite": favorite is not None}
+
 # Watch progress
 @app.get("/api/watch-progress/{content_id}")
 async def get_watch_progress(content_id: str, current_user: dict = Depends(get_current_user)):
@@ -446,8 +530,7 @@ async def get_watch_progress(content_id: str, current_user: dict = Depends(get_c
 @app.post("/api/watch-progress/{content_id}")
 async def update_watch_progress(
     content_id: str, 
-    watched_time: int, 
-    total_duration: int,
+    progress_data: WatchProgressUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     # Check if content exists
@@ -458,22 +541,50 @@ async def update_watch_progress(
             detail="Content not found"
         )
     
-    progress_data = {
+    progress_update = {
         "user_id": current_user["id"],
         "content_id": content_id,
-        "watched_time": watched_time,
-        "total_duration": total_duration,
+        "watched_time": progress_data.watched_time,
+        "total_duration": progress_data.total_duration,
         "last_watched": datetime.utcnow()
     }
     
     # Update or insert progress
     result = watch_progress_collection.update_one(
         {"user_id": current_user["id"], "content_id": content_id},
-        {"$set": progress_data},
+        {"$set": progress_update},
         upsert=True
     )
     
     return {"message": "Watch progress updated"}
+
+@app.get("/api/continue-watching")
+async def get_continue_watching(current_user: dict = Depends(get_current_user)):
+    # Get all watch progress for user
+    progress_list = list(watch_progress_collection.find({"user_id": current_user["id"]}))
+    
+    continue_watching = []
+    for progress in progress_list:
+        # Only include if watched more than 5% but less than 95%
+        if progress["total_duration"] > 0:
+            watch_percentage = (progress["watched_time"] / progress["total_duration"]) * 100
+            if 5 <= watch_percentage <= 95:
+                content = contents_collection.find_one({"id": progress["content_id"]})
+                if content:
+                    # Convert MongoDB ObjectId to string
+                    if '_id' in content:
+                        content['_id'] = str(content['_id'])
+                    continue_watching.append({
+                        "content": content,
+                        "watched_time": progress["watched_time"],
+                        "total_duration": progress["total_duration"],
+                        "last_watched": progress["last_watched"]
+                    })
+    
+    # Sort by last watched (most recent first)
+    continue_watching.sort(key=lambda x: x["last_watched"], reverse=True)
+    
+    return continue_watching
 
 if __name__ == "__main__":
     import uvicorn
