@@ -287,7 +287,9 @@ async def create_content(content: ContentCreate, admin_user: dict = Depends(get_
         "updated_at": datetime.utcnow()
     }
     
-    contents_collection.insert_one(content_data)
+    result = contents_collection.insert_one(content_data)
+    # Convert MongoDB ObjectId to string to make it JSON serializable
+    content_data["_id"] = str(result.inserted_id)
     return content_data
 
 @app.put("/api/admin/contents/{content_id}")
