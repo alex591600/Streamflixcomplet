@@ -338,6 +338,10 @@ async def get_contents(category: Optional[str] = None, search: Optional[str] = N
         filter_query["title"] = {"$regex": search, "$options": "i"}
     
     contents = list(contents_collection.find(filter_query))
+    # Convert MongoDB ObjectId to string to make it JSON serializable
+    for content in contents:
+        if '_id' in content:
+            content['_id'] = str(content['_id'])
     return contents
 
 @app.get("/api/contents/{content_id}")
@@ -348,6 +352,9 @@ async def get_content(content_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Content not found"
         )
+    # Convert MongoDB ObjectId to string to make it JSON serializable
+    if '_id' in content:
+        content['_id'] = str(content['_id'])
     return content
 
 @app.get("/api/categories")
