@@ -426,24 +426,76 @@ def main():
     # Setup
     tester = StreamflixAPITester()
     
-    # Run tests
+    print("\n===== TESTING STREAMFLIX API =====")
+    print(f"Base URL: {tester.base_url}")
+    print("=================================\n")
+    
+    # Test public endpoints
+    print("\n----- Testing Public Endpoints -----")
     tester.test_health_check()
+    tester.test_get_settings()
+    tester.test_get_public_contents()
+    tester.test_get_categories()
+    tester.test_search_contents()
+    tester.test_filter_by_category()
     
+    if tester.favorite_content_id:
+        tester.test_get_content_by_id()
+    
+    # Test admin functionality
+    print("\n----- Testing Admin Functionality -----")
     if not tester.test_admin_login():
-        print("❌ Admin login failed, stopping tests")
-        return 1
-
-    tester.test_get_current_user()
-    tester.test_get_contents()
-    
-    if not tester.test_create_content():
-        print("❌ Content creation failed")
+        print("❌ Admin login failed, stopping admin tests")
     else:
-        tester.test_update_content()
+        tester.test_get_current_user()
+        tester.test_get_admin_contents()
+        tester.test_get_admin_stats()
+        tester.test_update_settings()
+        
+        if not tester.test_create_content():
+            print("❌ Content creation failed")
+        else:
+            tester.test_update_content()
+            # Don't delete the content yet, we'll use it for user tests
+    
+    # Test user functionality
+    print("\n----- Testing User Functionality -----")
+    if not tester.test_user_registration():
+        print("❌ User registration failed, trying login with existing user")
+        if not tester.test_user_login():
+            print("❌ User login failed, stopping user tests")
+            # Clean up admin content if it exists
+            if tester.content_id:
+                tester.test_delete_content()
+            return 1
+    
+    # User is now logged in
+    tester.test_get_user_info()
+    
+    # Test favorites functionality
+    if tester.favorite_content_id:
+        print("\n----- Testing Favorites Functionality -----")
+        tester.test_add_to_favorites()
+        tester.test_get_favorites()
+        tester.test_check_favorite()
+        tester.test_remove_from_favorites()
+    
+    # Test watch progress functionality
+    if tester.favorite_content_id:
+        print("\n----- Testing Watch Progress Functionality -----")
+        tester.test_update_watch_progress()
+        tester.test_get_watch_progress()
+        tester.test_get_continue_watching()
+    
+    # Clean up admin content if it exists
+    if tester.content_id:
+        print("\n----- Cleaning Up Test Data -----")
         tester.test_delete_content()
-
+    
     # Print results
     print(f"\n📊 Tests passed: {tester.tests_passed}/{tester.tests_run}")
+    print(f"Success rate: {(tester.tests_passed / tester.tests_run * 100):.2f}%")
+    
     return 0 if tester.tests_passed == tester.tests_run else 1
 
 if __name__ == "__main__":
