@@ -309,6 +309,9 @@ async def update_content(content_id: str, content: ContentUpdate, admin_user: di
         )
     
     updated_content = contents_collection.find_one({"id": content_id})
+    # Convert MongoDB ObjectId to string to make it JSON serializable
+    if updated_content and '_id' in updated_content:
+        updated_content['_id'] = str(updated_content['_id'])
     return updated_content
 
 @app.delete("/api/admin/contents/{content_id}")
