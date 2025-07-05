@@ -264,6 +264,10 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
 @app.get("/api/admin/contents")
 async def get_all_contents(admin_user: dict = Depends(get_admin_user)):
     contents = list(contents_collection.find({}))
+    # Convert MongoDB ObjectId to string to make it JSON serializable
+    for content in contents:
+        if '_id' in content:
+            content['_id'] = str(content['_id'])
     return contents
 
 @app.post("/api/admin/contents")
